@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SX007G</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  h1 { font-size: 20px; margin-bottom: 6px; color: #c9a0dc; }
+  #status {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 20px;
+    min-height: 18px;
+  }
+  #status.connected { color: #7ecf7e; }
+  #status.error { color: #e07070; }
+
+  #connectBtn {
+    background: linear-gradient(135deg, #9b59b6, #8e44ad);
+    color: white;
+    border: none;
+    border-radius: 25px;
+    padding: 14px 40px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-bottom: 24px;
+    transition: opacity 0.2s;
+  }
+  #connectBtn:active { opacity: 0.7; }
+  #connectBtn.connected {
+    background: linear-gradient(135deg, #555, #444);
+    font-size: 13px;
+    padding: 10px 28px;
+  }
+
+  .panel {
+    display: none;
+    width: 100%;
+    max-width: 360px;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .panel.show { display: flex; }
+
+  .section-title {
+    font-size: 13px;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: -8px;
+  }
+
+  .modes {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .mode-btn {
+    background: #2a2a4a;
+    border: 2px solid transparent;
+    border-radius: 14px;
+    padding: 14px 0;
+    color: #c9a0dc;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .mode-btn.active {
+    border-color: #9b59b6;
+    background: #3a2a5a;
+    color: white;
+  }
+  .mode-btn:active { transform: scale(0.95); }
+
+  .slider-container {
+    background: #2a2a4a;
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #aaa;
+    margin-bottom: 12px;
+  }
+  .slider-value {
+    color: #c9a0dc;
+    font-weight: bold;
+    font-size: 22px;
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(to right, #4a3a6a 0%, #9b59b6 var(--pct), #333 var(--pct));
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #c9a0dc;
+    border: 3px solid #1a1a2e;
+    cursor: pointer;
+  }
+
+  #stopBtn {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+    border: none;
+    border-radius: 16px;
+    padding: 16px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: opacity 0.2s;
+    letter-spacing: 2px;
+  }
+  #stopBtn:active { opacity: 0.7; }
+
+  .current {
+    text-align: center;
+    font-size: 12px;
+    color: #666;
+    margin-top: -8px;
+  }
+</style>
+</head>
+<body>
+
+<h1>SX007G</h1>
+<div id="status">tap to connect</div>
+<button id="connectBtn" onclick="toggleConnect()">connect</button>
+
+<div class="panel" id="panel">
+  <div class="section-title">mode</div>
+  <div class="modes" id="modes"></div>
+
+  <div class="slider-container">
+    <div class="slider-label">
+      <span>intensity</span>
+      <span class="slider-value" id="intensityVal">5</span>
+    </div>
+    <input type="range" id="intensity" min="1" max="10" value="5"
+           oninput="onIntensity(this.value)">
+  </div>
+
+  <button id="stopBtn" onclick="stop()">STOP</button>
+  <div class="current" id="current"></div>
+</div>
+
+<script>
+const SERVICE  = '0000ffe0-0000-1000-8000-00805f9b34fb';
+const WRITE_ID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+
+let device, server, writeChar;
+let currentMode = 0, currentIntensity = 5;
+
+// build mode buttons
+const modesEl = document.getElementById('modes');
+for (let i = 1; i <= 8; i++) {
+  const btn = document.createElement('button');
+  btn.className = 'mode-btn';
+  btn.textContent = i;
+  btn.onclick = () => setMode(i);
+  btn.id = 'mode' + i;
+  modesEl.appendChild(btn);
+}
+
+function updateSliderBg() {
+  const slider = document.getElementById('intensity');
+  const pct = ((slider.value - 1) / 9) * 100;
+  slider.style.setProperty('--pct', pct + '%');
+}
+updateSliderBg();
+
+async function toggleConnect() {
+  if (device && device.gatt.connected) {
+    device.gatt.disconnect();
+    return;
+  }
+  try {
+    setStatus('scanning...', '');
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SERVICE]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    setStatus('connecting...', '');
+    server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    writeChar = await service.getCharacteristic(WRITE_ID);
+    setStatus('connected: ' + device.name, 'connected');
+    document.getElementById('connectBtn').textContent = 'disconnect';
+    document.getElementById('connectBtn').classList.add('connected');
+    document.getElementById('panel').classList.add('show');
+  } catch (e) {
+    setStatus('error: ' + e.message, 'error');
+  }
+}
+
+function onDisconnect() {
+  setStatus('disconnected', '');
+  document.getElementById('connectBtn').textContent = 'connect';
+  document.getElementById('connectBtn').classList.remove('connected');
+  document.getElementById('panel').classList.remove('show');
+  writeChar = null;
+}
+
+async function send(mode, intensity) {
+  if (!writeChar) return;
+  const cmd = new Uint8Array([0x55, 0x09, 0x00, 0x00, mode, intensity, 0x00]);
+  try {
+    await writeChar.writeValueWithoutResponse(cmd);
+    updateCurrent(mode, intensity);
+  } catch (e) {
+    setStatus('write error: ' + e.message, 'error');
+  }
+}
+
+function setMode(m) {
+  currentMode = m;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('mode' + m).classList.add('active');
+  send(currentMode, currentIntensity);
+}
+
+function onIntensity(v) {
+  currentIntensity = parseInt(v);
+  document.getElementById('intensityVal').textContent = v;
+  updateSliderBg();
+  if (currentMode > 0) send(currentMode, currentIntensity);
+}
+
+async function stop() {
+  currentMode = 0;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  if (!writeChar) return;
+  const cmd = new Uint8Array([0x55, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  try {
+    await writeChar.writeValueWithoutResponse(cmd);
+    updateCurrent(0, 0);
+  } catch (e) {
+    setStatus('write error: ' + e.message, 'error');
+  }
+}
+
+function updateCurrent(m, i) {
+  const el = document.getElementById('current');
+  if (m === 0) el.textContent = 'stopped';
+  else el.textContent = 'mode ' + m + ' / intensity ' + i;
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+</script>
+</body>
+</html>
