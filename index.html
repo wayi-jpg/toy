@@ -142,6 +142,17 @@
     color: #666;
     margin-top: -8px;
   }
+
+  .relay-status {
+    margin-top: 12px;
+    padding: 10px 16px;
+    background: #2a2a4a;
+    border-radius: 12px;
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+  }
+  .relay-status.active { color: #c9a0dc; }
 </style>
 </head>
 <body>
@@ -165,16 +176,19 @@
 
   <button id="stopBtn" onclick="stop()">STOP</button>
   <div class="current" id="current"></div>
+  <div class="relay-status" id="relay">relay: waiting for connection</div>
 </div>
 
 <script>
 const SERVICE  = '0000ffe0-0000-1000-8000-00805f9b34fb';
 const WRITE_ID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+const RELAY_URL = 'https://toy-relay.2254401603.workers.dev/';
 
 let device, server, writeChar;
 let currentMode = 0, currentIntensity = 5;
+let lastUpdatedAt = 0;
+let pollTimer = null;
 
-// build mode buttons
 const modesEl = document.getElementById('modes');
 for (let i = 1; i <= 8; i++) {
   const btn = document.createElement('button');
@@ -212,6 +226,7 @@ async function toggleConnect() {
     document.getElementById('connectBtn').textContent = 'disconnect';
     document.getElementById('connectBtn').classList.add('connected');
     document.getElementById('panel').classList.add('show');
+    startPolling();
   } catch (e) {
     setStatus('error: ' + e.message, 'error');
   }
@@ -223,6 +238,7 @@ function onDisconnect() {
   document.getElementById('connectBtn').classList.remove('connected');
   document.getElementById('panel').classList.remove('show');
   writeChar = null;
+  stopPolling();
 }
 
 async function send(mode, intensity) {
@@ -261,6 +277,46 @@ async function stop() {
   } catch (e) {
     setStatus('write error: ' + e.message, 'error');
   }
+}
+
+function startPolling() {
+  const relayEl = document.getElementById('relay');
+  relayEl.textContent = 'relay: listening';
+  relayEl.classList.add('active');
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(RELAY_URL);
+      const state = await res.json();
+      if (state.updated_at > lastUpdatedAt) {
+        lastUpdatedAt = state.updated_at;
+        if (state.cmd === 'stop') {
+          stop();
+          relayEl.textContent = 'relay: stop';
+        } else if (state.cmd === 'set') {
+          currentMode = state.mode;
+          currentIntensity = state.intensity;
+          document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+          if (state.mode >= 1 && state.mode <= 8) {
+            document.getElementById('mode' + state.mode).classList.add('active');
+          }
+          document.getElementById('intensity').value = state.intensity;
+          document.getElementById('intensityVal').textContent = state.intensity;
+          updateSliderBg();
+          send(state.mode, state.intensity);
+          relayEl.textContent = 'relay: mode ' + state.mode + ' / intensity ' + state.intensity;
+        }
+      }
+    } catch (e) {
+      relayEl.textContent = 'relay: error';
+    }
+  }, 1000);
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  const relayEl = document.getElementById('relay');
+  relayEl.textContent = 'relay: disconnected';
+  relayEl.classList.remove('active');
 }
 
 function updateCurrent(m, i) {
